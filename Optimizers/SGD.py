@@ -1,4 +1,5 @@
 from typing import Callable
+import math
 
 class SGD:
     def __init__(self, params, lr=0.1):
@@ -93,15 +94,36 @@ class AdaGrad(MomentumSGD):
     """AdaGrad introduces a different concept than MomentumSGD: instead of updating according to an accumulation of gradients, what if we reduce lr according to it? This way, values with a lot of accumulated gradient updates will update little, and values stuck in a valley will update a lot.
     :param params: List of parameters to optimize.
     :param lr: Learning rate
-    :param momentum: how much of last step's velocity to keep, [0,1)
-    :param lr_func: optional lambda function, should take in an integer representing the step and returns a % update on the base lr
+    :param lr_func: optional lambda function that should take in an integer representing the step and returns a % update on the base lr
     :param eps: numerical stabilizer to avoid division by zero
     """
-    def __init__(self, params, lr=0.1, momentum=0.9, lr_func = None, eps=1e-6):
-        super().__init__(params, lr, momentum, lr_func)
+    def __init__(self, params, lr=0.1, lr_func = None, eps=1e-6):
+        super().__init__(params, lr=lr, lr_func=lr_func)
         self.eps = eps
+
+    def update_velocity(self, velocity, grad):
+        """Defines how to update the velocity based on the gradient"""
+        return velocity + grad ** 2
 
     def update_param_at(self, idx):
         """AdaGrad's velocity update is different: """
         def updater(v, grad):
-            self.velocities[idx] += grad ** 2
+            self.velocities[idx] = self.update_velocity(self.velocities[idx], grad)
+            weighted_lr = self.lr / (self.eps + math.sqrt(self.velocities[idx]))
+            return v - weighted_lr * grad
+        return updater
+
+class RMSProp(AdaGrad):
+    """RMSProp is like AdaGrad, but instead of simply adding the squared gradient at every step it does a discounted update b * v_old + (1-b)*grad**2, making it less punishing for long treks through param space.
+    :param params: List of parameters to optimize.
+    :param lr: Learning rate
+    :param lr_func: optional lambda function that should take in an integer representing the step and returns a % update on the base lr
+    :param eps: numerical stabilizer to avoid division by zero
+    :param beta: discounting factor in weight update
+    """
+    def __init__(self, params, lr=0.1, lr_func=None, eps=1e-6, beta=0.9):
+        super().__init__(params, lr=lr, lr_func=lr_func, eps=eps)
+        self.beta = beta
+
+    def update_velocity(self, velocity, grad):
+        return self.beta * velocity + (1 - self.beta) * grad**2
