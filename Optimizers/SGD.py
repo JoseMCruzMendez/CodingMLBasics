@@ -127,3 +127,29 @@ class RMSProp(AdaGrad):
 
     def update_velocity(self, velocity, grad):
         return self.beta * velocity + (1 - self.beta) * grad**2
+
+class Adam(RMSProp):
+    """The goal of this section. Adam combines the advantages of RMSProp and MomentumSGD, where updates are slowed according to the accumulated velocity but also increased according to accumulated "acceleration".
+    :param params: List of parameters to optimize.
+    :param lr: Learning rate
+    :param lr_func: optional lambda function that should take in an integer representing the step and returns a % update on the base lr
+    :param eps: numerical stabilizer to avoid division by zero
+    :param beta: discounting factor in weight update
+    """
+    def __init__(self, params, lr=0.1, lr_func=None, eps=1e-6, beta=0.9, beta2=0.9):
+        super().__init__(params, lr=lr, lr_func=lr_func, eps=eps, beta=beta)
+        self.beta2 = beta2
+        self.accelerations = [0 for _ in self.params]
+
+    def update_acceleration(self, acceleration, grad):
+        return self.beta2 * acceleration + (1 - self.beta2) * grad
+
+    def update_param_at(self, idx):
+        def updater(v, grad):
+            self.velocities[idx] = self.update_velocity(self.velocities[idx], grad)
+            self.accelerations[idx] = self.update_acceleration(self.accelerations[idx], grad)
+            v_hat = self.velocities[idx] / (1 - self.beta ** (self.t + 1))
+            a_hat = self.accelerations[idx] / (1 - self.beta2 ** (self.t + 1))
+            weighted_lr = self.lr / (self.eps + math.sqrt(v_hat))
+            return v - weighted_lr * a_hat
+        return updater
