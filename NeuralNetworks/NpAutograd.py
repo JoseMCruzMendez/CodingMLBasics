@@ -9,17 +9,49 @@ from Optimizers.GradGraph import Variable #I had to refactor Variable, since cal
 def ensure_ndarray(f: Callable):
     #I've never used wraps before, getting it to work was a bit puzzling
     @wraps(f)
-    def type_check(self, other: Union["Variable", ndarray, float, int], *args, **kwargs):
-        if isinstance(other, Variable):
+    def type_check(self, other: Union["Tensor", "Variable", ndarray, float, int], *args, **kwargs):
+        if isinstance(other, Tensor):
             v = other
+        elif isinstance(other, Variable):
+            v = Tensor(other.v)
+            v.grad = other.grad
+            v._prev = other._prev
+            v._backward = other._backward
         elif isinstance(other, ndarray):
-            v =  Variable(other)
+            v =  Tensor(np.atleast_2d(other))
         elif isinstance(other, numbers.Real):
-            v =  Variable(np.array(other))
+            v =  Tensor(np.atleast_2d(np.array(other, dtype=np.float32)))
         else:
             raise TypeError(f"Unsupported type {type(other)}")
-        return f(self, v, *args, **kwargs)
+        bound = f.__get__(self, type(self))          # re-bind to keep method semantics
+        return bound(v, *args, **kwargs)
     return type_check
+
+
+def unbroadcast(g, target_shape):
+    """
+    Sum the gradient `g` over the axes that were broadcast
+    so that the result has `target_shape`.
+    """
+    #I'm not sure if I would've been able to come up with this myself, I am unfamiliar with broadcasting logic
+    # --- scalar target: just sum everything and return 0-D array -----------
+    if target_shape == ():                      # or len(target_shape) == 0
+        return np.asarray(g.sum())              # shape ()
+    # 1. Pad target_shape on the left so ndim matches
+    while len(target_shape) < g.ndim:
+        target_shape = (1,) + target_shape
+
+    # 2. Any axis where target size == 1 (or target had no axis)
+    #    must be summed out.
+    axes = tuple(
+        i for i, (g_dim, t_dim) in enumerate(zip(g.shape, target_shape))
+        if t_dim == 1
+    )
+    if axes:                        # no-op when axes == ()
+        g = g.sum(axis=axes, keepdims=True)
+
+    # 3. Finally reshape to exactly target_shape
+    return g.reshape(target_shape)
 
 class Tensor(Variable):
     def __init__(self, v: ndarray):
@@ -27,9 +59,15 @@ class Tensor(Variable):
         super().__init__(v)
         self.grad = np.zeros_like(v)
 
+    def _accumulate_grad(self, g):
+        g = unbroadcast(g, self.v.shape)
+        super()._accumulate_grad(g)
+
     @ensure_ndarray
     def __add__(self, other: Union["Variable", ndarray, float, int]):
         return super().__add__(other)
+
+    __radd__ = __add__
 
     @ensure_ndarray
     def __mul__(self, other):
@@ -45,37 +83,27 @@ class Tensor(Variable):
     def __rtruediv__(self, other):
         return other/self
 
-    @ensure_ndarray
-    def pow_one_tensor(self, other):
-        """Pow if only the base is a tensor"""
-        out = Tensor(self.v ** other)
-        out._prev = [self]
-        def _backward():
-            self.grad += other * (self.v ** (other - 1)) * out.grad
-        out._backward = _backward
-        return out
-
-    @ensure_ndarray
-    def pow_both_tensors(self, other):
-        """Pow if both base and exp are tensors"""
-        out = Tensor(self.v ** other.v)
+    def pow_both_tensors(self, other):#Had to reimplement since I call math.log
+        other = self._new(other) if not isinstance(other, Variable) else other
+        out = self._new(self.v ** other.v)
         out._prev = [self, other]
 
         def _backward():
             # base gradient – always safe
-            self.grad += other.v * (self.v ** (other.v - 1)) * out.grad
+            self._accumulate_grad(other.v * (self.v ** (other.v - 1)) * out.grad)
             # exponent gradient – only if base ≠ 0
-            if abs(self.v) > 1e-12:
-                other.grad += out.v * math.log(abs(self.v)) * out.grad
+            safe_vals = self.v.copy()
+            safe_vals[np.isclose(self.v, 0)] = 1e-6
+            other._accumulate_grad(out.v * np.log(safe_vals) * out.grad)
         out._backward = _backward
         return out
 
+
     def __pow__(self, other):
-        #This is a case of bad single responsibility, I could've refactored the original Variable but I want to leave this here as an example.
+        #This is a case of bad single responsibility, I could've refactored the original Variable but I want to leave this here as an example. #Ended up refactoring due to _accumulate_gradient refactor
         if isinstance(other, numbers.Real) or isinstance(other, ndarray):
-            return self.pow_one_tensor(other)
-        else:
-            return self.pow_both_tensors(other)
+            super().pow_single_tensor(other)
+        return self.pow_both_tensors(other)
 
     @ensure_ndarray
     def __neg__(self):
@@ -88,8 +116,7 @@ class Tensor(Variable):
 
 
     def update_v(self, updater: Callable[[ndarray, ndarray], ndarray]):
-        if not math.isfinite(self.grad):
-            self.grad = np.zeros_like(self.v)
+        self.grad[~np.isfinite(self.grad)] = 0.0
         grad = np.clip(self.grad, -5, 5)#clips gradients to prevent explosions
         self.v = updater(self.v, grad)
 
@@ -123,14 +150,17 @@ class Tensor(Variable):
         out._backward = _backward
         return out
 
-    def matmul(self, other):
-        res = np.matmul(self.v, other.v)
+    @ensure_ndarray
+    def matmul(self, other: "Tensor"):
+        A, B = np.atleast_2d(self.v), np.atleast_2d(other.v)
+        res = np.matmul(A, B)
         out = Tensor(res)
         out._prev = [self, other]
         def _backward():
+            grad = np.atleast_2d(out.grad)
             #This gradient was more complicated than I thought, but I think I understand the trace/permutation/inner product logic
-            self.grad += np.matmul(out.grad, other.v.T)
-            other.grad += np.matmul(self.v.T, out.grad)
+            self.grad += np.matmul(grad, B.swapaxes(-1, -2)) #swapping dims for batch dim
+            other.grad += np.matmul(A.swapaxes(-1, -2), grad)
         out._backward = _backward
         return out
 
@@ -142,6 +172,15 @@ def relu(var: Tensor):
     out._prev = [var]
     def _backward():
         var.grad += (res > 0) * out.grad
+    out._backward = _backward
+    return out
+
+def leaky_relu(var: Tensor, negative_slope=0.01):
+    res = np.maximum(var.v * negative_slope, var.v)
+    out = Tensor(res)
+    out._prev = [var]
+    def _backward():
+        var.grad += (var.v > 0) * out.grad + (var.v < 0) * out.grad * negative_slope
     out._backward = _backward
     return out
 
@@ -175,15 +214,25 @@ def BCELoss(probs: Tensor, target: Union[Tensor, ndarray], reduction="mean"):
 
 class GradModule:
 
-    def forward(self, *args, **kwargs):
+    def __init__(self):
+        self.params: list[Tensor] = []
+
+    @ensure_ndarray
+    def forward(self, value: Tensor, *args, **kwargs):
         raise NotImplementedError()
 
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
+    def __call__(self, value, *args, **kwargs):
+        return self.forward(value,*args, **kwargs)
 
     def get_params(self):
-        raise NotImplementedError()
+        return self.params
 
     def update(self, updater: Callable[[ndarray, ndarray], ndarray]):
         """Interface necessary for optimizers to update parameters"""
-        raise NotImplementedError()
+        for param in self.params:
+            param.update_v(updater)
+
+    def zero_grad(self):
+        """Interface necessary for optimizers to zero gradients"""
+        for param in self.params:
+            param.zero_grad()
