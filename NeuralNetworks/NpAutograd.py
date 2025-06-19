@@ -130,7 +130,7 @@ class Tensor(Variable):
         #broadcasting to axis and using keepdims was not something I thought of in foresight. I am having a bit of a hard time
         #Wrapping my head around how they are supposed to work for sum, mean and matmul despite the fact numpy handles most of the work
         res = np.sum(self.v, axis=axis, keepdims=keepdims)
-        out = Tensor(res)
+        out = self._new(res)
         out._prev = [self]
         shape = self.v.shape
         def _backward():
@@ -140,7 +140,7 @@ class Tensor(Variable):
 
     def mean(self, axis=None, keepdims=False):
         res = np.mean(self.v, axis=axis, keepdims=keepdims)
-        out = Tensor(res)
+        out = self._new(res)
         out._prev = [self]
         shape = self.v.shape
         #Takes either the full shape of the array or just the relevant axis we averaged
@@ -154,13 +154,22 @@ class Tensor(Variable):
     def matmul(self, other: "Tensor"):
         A, B = np.atleast_2d(self.v), np.atleast_2d(other.v)
         res = np.matmul(A, B)
-        out = Tensor(res)
+        out = self._new(res)
         out._prev = [self, other]
         def _backward():
             grad = np.atleast_2d(out.grad)
             #This gradient was more complicated than I thought, but I think I understand the trace/permutation/inner product logic
             self.grad += np.matmul(grad, B.swapaxes(-1, -2)) #swapping dims for batch dim
             other.grad += np.matmul(A.swapaxes(-1, -2), grad)
+        out._backward = _backward
+        return out
+
+    def exp(self): #need for softmax
+        res = np.exp(self.v)
+        out = self._new(res)
+        out._prev = [self]
+        def _backward():
+            self.grad += out.grad * res
         out._backward = _backward
         return out
 
@@ -210,6 +219,43 @@ def BCELoss(probs: Tensor, target: Union[Tensor, ndarray], reduction="mean"):
         return out.sum()
     else:
         raise ValueError("Invalid reduction mode, can be mean or sum")
+
+def softmax(z:Tensor):
+    z_shift = z - z.v.max(axis=-1, keepdims=True)   # stability
+    exps = z_shift.exp()
+    return exps / exps.sum(axis=-1, keepdims=True)
+
+def logloss(probs: Tensor, target: Union[Tensor, ndarray], reduction="mean"):
+    target = target.v if isinstance(target, Tensor) else target
+    probs = softmax(probs)
+    p = np.clip(probs.v, 1e-12, 1 - 1e-12)
+    res = -(target * np.log(p) + (1-target) * np.log(1-p)).sum(axis=-1, keepdims=True)
+    out = Tensor(res)
+    out._prev = [probs]
+    if reduction == "mean":
+        out = out.mean()
+    elif reduction == "sum":
+        out = out.sum()
+    else:
+        raise ValueError("Invalid reduction mode, can be mean or sum")
+
+    def _backward():
+        grad_logits = (p - target) * out.grad
+        probs._accumulate_grad(grad_logits)
+    out._backward = _backward
+    return out
+
+def rmse(preds: Tensor, true: Tensor, reduction="mean"):
+    diff_sq = (preds - true)**2.
+    mse = diff_sq.mean() if reduction == "mean" else diff_sq.sum()
+    rmse = mse ** 0.5
+    def _backward():
+        n = diff_sq.v.size
+        grad_rmse = rmse.grad / (2 * rmse.v)
+        preds._accumulate_grad(2*(preds.v - targets.v) / n * grad_rmse)
+    rmse._backward = rmse
+    return rmse
+
 
 
 class GradModule:

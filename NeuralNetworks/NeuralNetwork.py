@@ -64,9 +64,3 @@ class Linear(npa.GradModule):
         #Had issues with batch dimension I will have to correct
         return value.matmul(self.weights) + self.bias
 
-    # def update(self, updater: Callable[[np.ndarray, np.ndarray], np.ndarray]):
-    #     """Interface necessary for optimizers to update parameters"""
-    #     for param in self.params:
-    #         param.update_v(updater)
-    #         param.zero_grad()
-
