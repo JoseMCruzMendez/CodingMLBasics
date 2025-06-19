@@ -8,9 +8,12 @@ class Variable:
         self._backward = lambda: None
         self._prev = []
 
+    def _new(self, val):
+        return self.__class__(val)
+
     def __add__(self, other: Union["Variable", float, int]):
-        other = Variable(other) if not isinstance(other, Variable) else other
-        out = Variable(self.v + other.v)
+        other = self._new(other) if not isinstance(other, Variable) else other
+        out = self._new(self.v + other.v)
         out._prev = [self, other]
         def _backward():
             self.grad += 1. * out.grad
@@ -24,8 +27,8 @@ class Variable:
         return self + (other * -1)
 
     def __mul__(self, other):
-        other = Variable(other) if not isinstance(other, Variable) else other
-        out = Variable(self.v * other.v)
+        other = self._new(other) if not isinstance(other, Variable) else other
+        out = self._new(self.v * other.v)
         out._prev = [self, other]
         def _backward():
             self.grad += other.v * out.grad
@@ -36,8 +39,8 @@ class Variable:
     __rmul__ = __mul__
 
     def __truediv__(self, other):
-        other = Variable(other) if not isinstance(other, Variable) else other
-        out = Variable(self.v / other.v)
+        other = self._new(other) if not isinstance(other, Variable) else other
+        out = self._new(self.v / other.v)
         out._prev = [self, other]
         def _backward():
             self.grad += 1/other.v * out.grad
@@ -46,22 +49,20 @@ class Variable:
         return out
 
     def __rtruediv__(self, other):
-        other = Variable(other) if not isinstance(other, Variable) else other
+        other = self._new(other) if not isinstance(other, Variable) else other
         return other/self
 
     def __pow__(self, other):
-        # --- constant-exponent fast-path ------------------------------
         if isinstance(other, numbers.Real):
-            out = Variable(self.v ** other)
+            out = self._new(self.v ** other)
             out._prev = [self]
             def _backward():
                 self.grad += other * (self.v ** (other - 1)) * out.grad
             out._backward = _backward
             return out
 
-        # --- variable-exponent fallback (rare in your code) -----------
-        other = Variable(other) if not isinstance(other, Variable) else other
-        out = Variable(self.v ** other.v)
+        other = self._new(other) if not isinstance(other, Variable) else other
+        out = self._new(self.v ** other.v)
         out._prev = [self, other]
 
         def _backward():
@@ -75,7 +76,7 @@ class Variable:
 
 
     def __neg__(self):
-        out = Variable(-self.v)
+        out = self._new(-self.v)
         out._prev = [self]
         def _backward():
             self.grad += -1 * out.grad
@@ -108,7 +109,7 @@ class Variable:
         self.v = updater(self.v, grad)
 
     def zero_grad(self):
-        self.grad = 0
+        self.grad = 0.
         self._prev = []
 
 class GradModule:
