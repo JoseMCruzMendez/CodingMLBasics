@@ -4,7 +4,7 @@ from typing import Union, Callable
 import math, numbers
 from functools import wraps
 from Optimizers.GradGraph import Variable #I had to refactor Variable, since calling super would return variables and not tensors
-#Instead of creating Variable(res), I had to edit the method to return self.__class()__(res). This seems to be called "covariant return issue"? The fix seems to be present in numpy
+#Instead of creating Variable(res), I had to edit the method to return self.__class()__(res). This seems to be called "covariant return issue"? The fix seems present in numpy
 
 def ensure_ndarray(f: Callable):
     #I've never used wraps before, getting it to work was a bit puzzling
@@ -248,13 +248,13 @@ def logloss(probs: Tensor, target: Union[Tensor, ndarray], reduction="mean"):
 def rmse(preds: Tensor, true: Tensor, reduction="mean"):
     diff_sq = (preds - true)**2.
     mse = diff_sq.mean() if reduction == "mean" else diff_sq.sum()
-    rmse = mse ** 0.5
+    out = mse ** 0.5
     def _backward():
         n = diff_sq.v.size
-        grad_rmse = rmse.grad / (2 * rmse.v)
-        preds._accumulate_grad(2*(preds.v - targets.v) / n * grad_rmse)
-    rmse._backward = rmse
-    return rmse
+        grad_rmse = out.grad / (2 * out.v)
+        preds._accumulate_grad(2*(preds.v - true) / n * grad_rmse)
+    out._backward = _backward
+    return out
 
 
 
