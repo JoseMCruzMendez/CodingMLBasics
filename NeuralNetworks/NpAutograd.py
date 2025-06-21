@@ -183,6 +183,15 @@ class Tensor(Variable):
             self.grad += np.reshape(out.grad, self.v.shape)
         out._backward = _backward
         return out
+    #turns out flatten doesn't keep batch size
+    def reshape(self, shape):
+        res = self.v.reshape(shape)
+        out = self._new(res)
+        out._prev = [self]
+        def _backward():
+            self.grad += np.reshape(out.grad, self.v.shape)
+        out._backward = _backward
+        return out
 
 #Helper functions necessary for NN, at first they were in the class but I think they make more sense outside
 

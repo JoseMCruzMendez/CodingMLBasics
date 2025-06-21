@@ -17,12 +17,12 @@ class ConvLayer(GradModule):
         self.in_channels = in_channels
         self.out_channels = out_channels
 
-        assert kernel_size//2 <= padding, "Padding must be more than half the kernel size"
+        #assert kernel_size//2 <= padding, "Padding must be more than half the kernel size"
         self.padding = padding
 
         #Since I will only be using this on MNIST all channels will be assumed to be 1.
         #Furthermore, I will assume all kernels to be square
-        self.kernel = Tensor(np.random.randn(1, out_channels, in_channels, kernel_size, kernel_size)) #(broadcast_dim, C_out, C_in, k_h, k_w)
+        self.kernel = Tensor(np.random.randn(out_channels, in_channels, kernel_size, kernel_size)) #(C_out, C_in, k_h, k_w)
         self.bias = Tensor(np.random.randn(self.out_channels))
         self.params = [self.kernel, self.bias]
         self.activation = activation
@@ -44,8 +44,9 @@ class ConvLayer(GradModule):
         out_i, out_j = 0, 0
         for i in range(0, loop_height + 1, self.stride):
             for j in range(0, loop_width + 1, self.stride):
-                patch = padded_v[:, None, :, i:i+self.kernel_size, j:j+self.kernel_size] * self.kernel.v #shape (batch, C_out, C_in, k_h, k_w)
-                #Since kernel is padded, the leading broadcast_dim allows broadcasting over batchsize, and the None in padded_v corresponds to C_out broadcasting
+                patch = padded_v[:, None, :, i:i+self.kernel_size, j:j+self.kernel_size] #shape (batch, 1, C_in, k_h, k_w)
+                patch = patch * self.kernel.v[None,:,:,:,:] #(batch, 1, C_in, k_h, k_w) * (1, C_out, C_in, k_h, k_w)
+                #Since kernel is padded, the leading None allows broadcasting over batchsize, and the None in padded_v corresponds to C_out broadcasting
                 res[:, :, out_i, out_j] = np.sum(patch, axis=(2,3,4)) + self.bias.v #now we sum over C_in, k_h, k_w to obtain a (batch, C_out) result.
                 #Since we're accumulating in res, we obtain a (batch, C_out, h_out, w_out) tensor
                 out_j +=1
@@ -64,15 +65,16 @@ class ConvLayer(GradModule):
                     conv_patch = padded_v[:, :, r:r+self.kernel_size, c:c+self.kernel_size]   # shape (batch, C_in, K, K)
                     g = out.grad[:,:,i,j] #(batch, C_out)
                     bias_grad += g.sum(axis=0) #sum over batch and get C_out
-                    kernel_grad += np.einsum('bo,bilw->oilw', g, conv_patch)[None,:,:,:,:] #sums g[::NNN]*patch[:N:::] over ax 0, then adds broadcast_dim
+                    kernel_grad += np.einsum('bo,bilw->oilw', g, conv_patch) #sums g[::NNN]*patch[:N:::] over ax 0, then adds broadcast_dim
                     # multiply by each filter’s weights:
                     # this yields shape (batch, out_channels, in_channels, K, K)
                     # then sum over out_channels to collapse into in_channels
                     # → (batch, in_channels, K, K)
-                    window_grad = np.sum(
-                        self.kernel.v[:,:, :, :, :] * g[:, :, None, None, None],
-                        axis=1
-                    )#(1,C_out,C_in,k_h,k_w) x (batch, C_out, 1,1,1) summed over C_out
+                    flipped = self.kernel.v[:,:,::-1,::-1]
+                    window_grad = np.tensordot(
+                        g, flipped, #(batch, C_out),(C_out, C_in, k,k) -> (batch, C_in, k, k)
+                        axes=(1,0)
+                    )
 
                     # now add that into the correct slice of grad_padded
                     grad_padded[:, :, r:r+self.kernel_size, c:c+self.kernel_size] += window_grad
@@ -115,7 +117,7 @@ def Pool(kernel_size, stride=1, type:Literal["max", "avg"]="max"):
                 i_val = i * stride
                 for j in range(out_width):
                     j_val = j * stride
-                    patch = out.v[:, :, i:i+kernel_size, j:j+kernel_size]  # (batch, C, p_h, p_w)
+                    patch = value.v[:, :, i_val:i_val+kernel_size, j_val:j_val+kernel_size]  # (batch, C, p_h, p_w)
                     g_patch = out.grad[:, :, i, j]                # (batch, C)
                     if type == "max":
                         # build a mask of where the max occurred
