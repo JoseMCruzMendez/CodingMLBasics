@@ -33,7 +33,7 @@ class NeuralNetwork(npa.GradModule):
         prev = input_size
         for i, next_size in enumerate(hidden):
             next_layer = Linear(prev, next_size)
-            self.params.append(next_layer)
+            self.params.extend(next_layer.get_params())
             self.layers.append(next_layer)
             self.layers.append(activation[i])
             prev = next_size

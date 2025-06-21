@@ -93,8 +93,9 @@ class Tensor(Variable):
             self._accumulate_grad(other.v * (self.v ** (other.v - 1)) * out.grad)
             # exponent gradient – only if base ≠ 0
             safe_vals = self.v.copy()
+            signs = np.sign(self.v)
             safe_vals[np.isclose(self.v, 0)] = 1e-6
-            other._accumulate_grad(out.v * np.log(safe_vals) * out.grad)
+            other._accumulate_grad(out.v * signs * np.log(np.abs(safe_vals)) * out.grad)
         out._backward = _backward
         return out
 
@@ -173,6 +174,16 @@ class Tensor(Variable):
         out._backward = _backward
         return out
 
+    #Had to implement for convnets to prevent weird behavior in gradgraph
+    def flatten(self):
+        res = self.v.flatten()
+        out = self._new(res)
+        out._prev = [self]
+        def _backward():
+            self.grad += np.reshape(out.grad, self.v.shape)
+        out._backward = _backward
+        return out
+
 #Helper functions necessary for NN, at first they were in the class but I think they make more sense outside
 
 def relu(var: Tensor):
@@ -193,8 +204,9 @@ def leaky_relu(var: Tensor, negative_slope=0.01):
     out._backward = _backward
     return out
 
-def sigmoid(var: Tensor):
-    res = 1/(1 + np.exp(-var.v))
+def sigmoid(var: Tensor)->Tensor:
+    safe_var = np.clip(var.v, -50, 50) #Had an overflow error that kept occuring
+    res = 1/(1 + np.exp(-safe_var))
     out = Tensor(res)
     out._prev = [var]
     def _backward():
@@ -251,7 +263,7 @@ def rmse(preds: Tensor, true: Tensor, reduction="mean"):
     out = mse ** 0.5
     def _backward():
         n = diff_sq.v.size
-        grad_rmse = out.grad / (2 * out.v)
+        grad_rmse = out.grad / (2 * out.v + 1e-8)
         preds._accumulate_grad(2*(preds.v - true) / n * grad_rmse)
     out._backward = _backward
     return out
