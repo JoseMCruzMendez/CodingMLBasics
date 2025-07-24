@@ -225,7 +225,8 @@ def sigmoid(var: Tensor)->Tensor:
 
 def BCELoss(probs: Tensor, target: Union[Tensor, ndarray], reduction="mean"):
     target = target.v if isinstance(target, Tensor) else target
-    res = -target * np.log(probs.v) - (1. - target) * np.log(1 - probs.v)
+    safe_probs = np.clip(probs.v, 1e-6, 1-1e-6)
+    res = -target * np.log(safe_probs) - (1. - target) * np.log(1 - safe_probs)
     out = Tensor(res)
     out._prev = [probs]
     def _backward():

@@ -7,7 +7,8 @@ class NeuralNetwork(npa.GradModule):
                  input_size: int,
                  output_size: int,
                  hidden: list[int] = None,
-                 activation: Union[Callable[[npa.Tensor], npa.Tensor], List[Callable[[npa.Tensor], npa.Tensor]]] = npa.relu
+                 activation: Union[Callable[[npa.Tensor], npa.Tensor], List[Callable[[npa.Tensor], npa.Tensor]]] = npa.relu,
+                 var = 0.001
     ):
         """Implements a basic Neural Network with one hidden layer by default.
         :param input_size: number of input features
@@ -32,7 +33,7 @@ class NeuralNetwork(npa.GradModule):
         self.layers = []
         prev = input_size
         for i, next_size in enumerate(hidden):
-            next_layer = Linear(prev, next_size)
+            next_layer = Linear(prev, next_size, var=var)
             self.params.extend(next_layer.get_params())
             self.layers.append(next_layer)
             self.layers.append(activation[i])
@@ -47,7 +48,7 @@ class NeuralNetwork(npa.GradModule):
         return value
 
 class Linear(npa.GradModule):
-    def __init__(self, in_features, out_features, init: Literal["normal", "uniform"]="normal"):
+    def __init__(self, in_features, out_features, init: Literal["normal", "uniform"]="normal", var=0.001):
         super().__init__()
         if init == "normal":
             sampler = np.random.randn
@@ -56,7 +57,7 @@ class Linear(npa.GradModule):
         else:
             raise ValueError("Invalid init mode, can be normal or uniform")
 
-        self.weights = npa.Tensor(sampler(in_features, out_features))
+        self.weights = npa.Tensor(sampler(in_features, out_features)*np.sqrt(var))
         self.bias = npa.Tensor(sampler(1, out_features))
         self.params = [self.weights, self.bias]
 

@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from NeuralNetworks.VecOptim import SGD, MomentumSGD, AdaGrad, RMSProp, Adam, MomentumSGDW, AdaGradW, RMSPropW, AdamW
 from NeuralNetworks.NpAutograd import logloss, softmax
@@ -150,3 +151,9 @@ def train_on_optims(model, datasets, epochs=50, w=False):
     axs[1].set_title(f"Weights")
     fig.suptitle(f"Optimizer: {reg_type} Reg Param: {reg_param}")
     plt.show()
+
+def sma(vals: np.ndarray, steps=100)->np.ndarray:
+    """Short simple moving average implementation."""
+    cum_sum = vals.cumsum()
+    moving_average = (cum_sum[steps:]-cum_sum[:-steps])/steps
+    return moving_average
